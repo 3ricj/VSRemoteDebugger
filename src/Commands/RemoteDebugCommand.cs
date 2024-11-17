@@ -13,6 +13,7 @@ using System.Diagnostics;
 using Newtonsoft.Json.Linq;
 using System.Linq;
 
+
 namespace VSRemoteDebugger
 {
 	/// <summary>
@@ -20,10 +21,12 @@ namespace VSRemoteDebugger
 	/// </summary>
 	internal sealed class RemoteDebugCommand
 	{
-		/// <summary>
-		/// Command ID.
-		/// </summary>
-		public const int CommandId = 0x0100;
+        private static IVsOutputWindowPane _generalPane;
+
+        /// <summary>
+        /// Command ID.
+        /// </summary>
+        public const int CommandId = 0x0100;
 
 		/// <summary>
 		/// Command menu group (command set GUID).
@@ -68,12 +71,14 @@ namespace VSRemoteDebugger
 			await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(package.DisposalToken);
 			var commandService = await package.GetServiceAsync(typeof(IMenuCommandService)).ConfigureAwait(false) as OleMenuCommandService;
 			Instance = new RemoteDebugCommand(package, commandService);
-		}
 
-		/// <summary>
-		/// Gets the instance of the command.
-		/// </summary>
-		public static RemoteDebugCommand Instance{ get; private set; }
+        }
+
+
+        /// <summary>
+        /// Gets the instance of the command.
+        /// </summary>
+        public static RemoteDebugCommand Instance{ get; private set; }
 
 		/// <summary>
 		/// Wrapper around a (alert) messagebox
@@ -200,8 +205,8 @@ namespace VSRemoteDebugger
 			try
 			{
 				Bash("echo hello");
-				return true;
-			}
+                return true;
+            }
 			catch(Exception)
 			{
 				throw;
@@ -284,34 +289,54 @@ namespace VSRemoteDebugger
 			}
 		}
 
-		/// <summary>
-		/// Transfers the files to remote asynchronously. The transfer is done via an external process
-		/// </summary>
-		/// <returns></returns>
-		private async Task<string> TransferFilesAsync()
+        public static string WindowsToWslPath(string windowsPath)
+        {
+            Process process = new Process
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = "wsl",
+                    Arguments = $"wslpath -u \"{windowsPath}\"",
+                    RedirectStandardOutput = true,
+                    CreateNoWindow = true,
+                    UseShellExecute = false
+                }
+            };
+
+            process.Start();
+            string wslPath = process.StandardOutput.ReadToEnd().Trim();
+            process.WaitForExit();
+            return wslPath;
+        }
+
+        /// <summary>
+        /// Transfers the files to remote asynchronously. The transfer is done via an external process
+        /// </summary>
+        /// <returns></returns>
+        private async Task<string> TransferFilesAsync()
 		{
 			try
 			{
 				Bash($@"mkdir -p {Settings.DebugFolderPath}"); // Make sure the folder exists. Removes an annoying 'file not found' exception.
+				string localWslPath = WindowsToWslPath( _localhost.OutputDirFullName + "\\");
 
-				using (var process = new Process())
+                using (var process = new Process())
 				{
 					process.StartInfo = new ProcessStartInfo
 					{
-						FileName = "scp",
-						Arguments = $@"-pr {_localhost.OutputDirFullName}\* {Settings.UserName}@{Settings.IP}:{Settings.DebugFolderPath}",
-						RedirectStandardOutput = true,
+//						FileName = "scp",
+//						Arguments = $@"-C -pr {_localhost.OutputDirFullName}\* {Settings.UserName}@{Settings.IP}:{Settings.DebugFolderPath}",
+                        FileName = "wsl",
+                        Arguments = $@"rsync -avz '{localWslPath}' {Settings.UserName}@{Settings.IP}:{Settings.DebugFolderPath}",
+
+                        RedirectStandardOutput = true,
 						RedirectStandardError = true,
 						UseShellExecute = false,
 						CreateNoWindow = true,
 					};
 
 					string output = "";
-
-
 					process.Start();
-
-
 					process.OutputDataReceived += new DataReceivedEventHandler((sender, e) =>
 					{
 						output += e.Data;
@@ -331,7 +356,6 @@ namespace VSRemoteDebugger
 						//string output = await process.StandardOutput.ReadToEndAsync();
 						return "Error in file copy, scp returned error code: " + process.ExitCode.ToString() + "\r\n" + output;
                     }
-
 					return "";
 				}
 			}
